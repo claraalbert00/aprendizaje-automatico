@@ -1,0 +1,36 @@
+---
+title: "P2 - Función Regresión Lineal"
+author: "Clara Albert"
+date: "Octubre - 2021"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Simulación del conjunto de datos
+
+```{r}
+n <- 1000
+peso <- rnorm(n=n, mean=45, sd=12)
+altura <- rnorm(n=n, mean=105 + 0.9 * peso, sd=8)
+data = data.frame(peso,altura)
+```
+
+#### Estimación parámetros del modelo tal que minimicen el RSS:
+
+```{r}
+lver_reg = function(data, par){
+  with(data, sum((par[1] + par[2] * peso - altura)^2))
+}
+
+optim(par=c(0,1), fn=lver_reg, data=data)
+
+summary(lm(altura~peso))
+```
+
+Podemos comprovar que los estimadores de los parámetros son los mismos

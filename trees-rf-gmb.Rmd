@@ -1,0 +1,181 @@
+---
+title: "Bagging"
+author: "Clara Albert"
+date: "3/1/2022"
+output: html_document
+---
+
+```{r, include = FALSE}
+library(tidyverse)
+library(RANN)
+library(recipes)
+library(rpart)
+library(caret)
+```
+
+## Datos
+
+### Cargamos los datos
+```{r}
+load("EDY.Rdata")
+```
+
+### Preproceso de los datos
+```{r}
+dim(train)
+class(train$EDY)
+table(train$EDY)
+```
+
+La variable EDY es la que predecimos a partir de las otras (cg__). Tiene dos categorias: Yes / No. Vemos que está bastante balanceada. Además vemos que esta categorizada como factor, por lo que no hace falta recodificarla.
+
+**Creamos el objeto recipe**
+```{r}
+objeto_recipe <- recipe(formula = EDY ~ ., data=train) 
+objeto_recipe <- objeto_recipe %>% step_rm(id)
+objeto_recipe
+```
+
+**Datos faltantes**
+```{r}
+sum(is.na(train))
+sum(is.na(test))
+```
+
+No hay ningún missing en todo el data set, por lo que no tenemos que imputar los datos.
+
+**Predictores con poca variabilidad**
+```{r}
+nzv <- nearZeroVar(train, saveMetrics= TRUE)
+sum(nzv$zeroVar)
+objeto_recipe <- objeto_recipe %>% step_nzv(all_predictors())
+```
+
+No tenemos ninguna variable problemática.
+
+**Predictores correlacionados**
+```{r}
+continuas = train %>% select_if(is.numeric)
+correlacion = cor(continuas)
+findCorrelation(correlacion, cutoff = 0.95)
+```
+
+Vemos que hay bastantes variables que tienen una correlación superior a 0.95, por lo que las podemos eliminar.
+```{r}
+objeto_recipe <- objeto_recipe %>% step_corr(all_predictors(), threshold = 0.95)
+```
+
+**Centrado y escalado de los datos**
+```{r}
+objeto_recipe <- objeto_recipe %>% step_center(all_numeric())
+objeto_recipe <- objeto_recipe %>% step_scale(all_numeric())
+```
+
+**Aprendizaje de las transformaciones**
+```{r}
+trained_recipe <- prep(objeto_recipe, training = train)
+trained_recipe
+```
+
+**Aplicación a nuestros datos**
+```{r}
+train_prep <- bake(trained_recipe, new_data = train)
+test_prep  <- bake(trained_recipe, new_data = test)
+```
+
+Una vez tenemos nuestros datos pre-procesados, podemos empezar a realizar los modelos predictivos y predecir el valor de EDY en la muestra test.
+
+## Modelos
+```{r}
+colnames(train_prep)<-make.names(colnames(train_prep))
+colnames(test_prep)<-make.names(colnames(test_prep))
+
+oj_trControl = trainControl (method = "cv",
+   number = 10,
+   savePredictions = "final",  # guardaremos preds para el valor óptimo del parámetro a tunear
+   classProbs = TRUE,  # probs para las clases además de preds
+   summaryFunction = twoClassSummary
+   )
+```
+
+### Single Tree (caret)
+
+```{r}
+set.seed(1234)
+oj_mdl_cart <- train(
+  EDY ~ .,
+  data = train_prep,
+  method = "rpart",
+  tuneLength = 5,
+  metric = "ROC",
+  trControl = oj_trControl
+)
+oj_mdl_cart
+
+pred_cart <- predict(oj_mdl_cart, newdata = test_prep, type = "raw")
+auc_cart <- max(oj_mdl_cart$results$ROC); auc_cart
+```
+
+
+### Bagged trees
+```{r}
+set.seed(1234)
+oj_mdl_bag <- train(
+   EDY ~ ., 
+   data = train_prep, 
+   method = "treebag",
+   trControl = oj_trControl,
+   metric = "ROC"
+)
+
+pred_bag <- predict(oj_mdl_bag, newdata = test_prep, type = "raw")
+
+auc_bag <- max(oj_mdl_bag$results$ROC); auc_bag
+```
+
+### Random Forest
+```{r}
+sqrt(351)
+
+set.seed(1234)
+oj_mdl_rf <- train(
+   EDY ~ ., 
+   data = train_prep, 
+   method = "rf",
+   metric = "ROC",
+   tuneGrid = expand.grid(mtry = 15:20),
+   trControl = oj_trControl,
+   num.trees = 500
+)
+
+pred_rf <- predict(oj_mdl_rf, newdata = test_prep, type = "raw")
+
+auc_rf <- max(oj_mdl_rf$results$ROC);auc_rf
+```
+
+### GMB básico
+```{r}
+set.seed(1234)
+garbage <- capture.output(
+oj_mdl_gbm <- train(
+   EDY ~ ., 
+   data = train_prep, 
+   method = "gbm",
+   tuneLength = 5,
+   trControl = oj_trControl,
+   metric = "ROC"
+))
+
+pred_gmb <- predict(oj_mdl_gbm, newdata = test_prep, type = "raw")
+
+auc_gbm <- max(oj_mdl_gbm$results$ROC);auc_gbm
+```
+Basándonos en la curva ROC de los métodos empleados, el método con valor más alto es gbm, por lo tanto es el modelo que escogeremos. 
+
+```{r}
+data = data.frame(id=test$id,EDY=pred_gmb)
+
+write.table(data, file="1530466.txt", append = FALSE, sep = "\t", col.names = TRUE, row.names = FALSE)
+```
+
+

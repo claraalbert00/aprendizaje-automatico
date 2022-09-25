@@ -1,0 +1,29 @@
+---
+title: "p2_MapReduce"
+author: "Clara Albert"
+date: "23/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Ejercicio 1
+```{r}
+lista = list(sample(c(letters),10),sample(c(letters),10),sample(c(letters),10))
+
+Reduce(intersect,lista)
+```
+
+## Ejercicio 2
+```{r}
+X <- list(estudio1=c(120, 134, 156, 167, 122), estudio2=c(134, 116, 123), estudio3=c(110, 145, 124, 145, 160, 134, 122), estudio4=c(114, 113, 129, 178, 155, 144, 134, 145))
+
+media.ponderada = function(lista){
+  medias=Map(mean, lista)
+  return(mean(unlist(medias)))
+}
+
+media.ponderada(X)
+```

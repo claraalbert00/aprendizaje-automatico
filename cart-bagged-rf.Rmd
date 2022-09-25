@@ -1,0 +1,275 @@
+---
+title: "P - CART/Bagged/RF"
+author: "Clara Albert"
+output:
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Cargamos los datos
+```{r}
+load("breast.Rdata")
+```
+
+Cargamos las librerias necesarias
+```{r, message=FALSE}
+library(tidyverse)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+```
+
+## Single Tree
+
+```{r}
+set.seed(1234)
+oj_mdl_cart_full <- rpart(formula = diagnosis ~ ., data = breast_train_prep, 
+                          method = "class")
+oj_mdl_cart_full
+```
+
+Vemos como solo 3 variables de todas se han usado para este árbol. El diagrama del árbol completo es: 
+```{r}
+rpart.plot(oj_mdl_cart_full, yesno = TRUE)
+```
+
+La función *plotcp* nos da una representación gráfica entre el error y el cp. 
+```{r}
+plotcp(oj_mdl_cart_full, upper = "splits")
+```
+
+La figura nos sugiere que debería podar a 2 o 4 divisiones ya que los intervalos de confianza del error se encuentran dentro de la línea discontínua.
+
+En este caso, el error llega a su mínimo en CP = 0.028 con 2 divisiones. Podaremos el árbol en 2.
+```{r}
+oj_mdl_cart <- prune(
+   oj_mdl_cart_full,
+   cp = oj_mdl_cart_full$cptable[oj_mdl_cart_full$cptable[, 2] == 2, "CP"]
+)
+rpart.plot(oj_mdl_cart, yesno = TRUE)
+```
+
+Vemos que ahora solo tenemos en cuenta 2 variables. 
+
+Una vez tenemos el modelo, podemos evaluarlo en la muestra test
+```{r}
+pred <- predict(oj_mdl_cart, newdata = breast_test_prep, type = "class") 
+oj_cm_cart <- confusionMatrix(pred,  breast_test_prep$diagnosis)
+oj_cm_cart
+```
+
+Además de evaluar el modelo con las medidas estándard, también lo podemos hacer con el área bajo la curva ROC.
+```{r}
+pred2 <-  predict(oj_mdl_cart, newdata = breast_test_prep, type = "prob")[,"B"]
+roc.car <- roc(breast_test_prep$diagnosis, pred2, print.auc=TRUE, 
+               ci=TRUE,
+               plot=TRUE)
+```
+
+## Single Tree (caret)
+```{r}
+colnames(breast_train_prep)<-make.names(colnames(breast_train_prep))
+colnames(breast_test_prep)<-make.names(colnames(breast_test_prep))
+
+oj_trControl = trainControl (method = "cv",
+   number = 10,
+   savePredictions = "final",  # guardaremos preds para el valor óptimo del parámetro a tunear
+   classProbs = TRUE,  # probs para las clases además de preds
+   summaryFunction = twoClassSummary
+   )
+
+set.seed(1234)
+oj_mdl_cart2 <- train(
+  diagnosis ~ .,
+  data = breast_train_prep,
+  method = "rpart",
+  tuneLength = 5,
+  metric = "ROC",
+  trControl = oj_trControl
+)
+oj_mdl_cart2
+```
+
+El segundo cp (0.0067) produce la mayor ROC (0.938). Podemos afinar el resultado a partir del *tuning grid*
+
+```{r}
+set.seed(1234)
+oj_mdl_cart2 <- train(
+   diagnosis ~ ., 
+   data = breast_train_prep, 
+   method = "rpart",
+   tuneGrid = expand.grid(cp = seq(from = 0.001, to = 0.010, length = 11)),  
+   metric = "ROC",
+   trControl = oj_trControl
+)
+oj_mdl_cart2
+```
+
+Hemos mejorado el ROC y el mejor modelo se consigue con un CP = 0.0073. El árbol utilizando caret es:
+```{r}
+rpart.plot(oj_mdl_cart2$finalModel)
+```
+
+Y su rendimiento es:
+```{r}
+pred3 <- predict(oj_mdl_cart2, newdata = breast_test_prep, type = "raw") 
+oj_cm_cart2 <- confusionMatrix(pred3,  breast_test_prep$diagnosis)
+oj_cm_cart2
+
+pred4 <- predict(oj_mdl_cart2, newdata = breast_test_prep, type = "prob")[,"B"] 
+roc.car2 <- roc(breast_test_prep$diagnosis, pred4, print.auc=TRUE, 
+               ci=TRUE,
+               plot=TRUE)
+```
+
+## Bagged trees
+```{r}
+set.seed(1234)
+oj_mdl_bag <- train(
+   diagnosis ~ ., 
+   data = breast_train_prep, 
+   method = "treebag",
+   trControl = oj_trControl,
+   metric = "ROC"
+)
+oj_mdl_bag$finalModel
+```
+Y su rendimiento es:
+```{r}
+pred_bag <- predict(oj_mdl_bag, newdata = breast_test_prep, type = "raw")
+oj_cm_bag <- confusionMatrix(pred_bag, breast_test_prep$diagnosis)
+oj_cm_bag
+
+pred_bag2 <- predict(oj_mdl_bag, newdata = breast_test_prep, type = "prob")[,"B"]
+roc.bag <- roc(breast_test_prep$diagnosis, pred_bag2, print.auc=TRUE, 
+               ci=TRUE,
+               plot=TRUE)
+```
+
+## Random Forest
+```{r}
+set.seed(1234)
+oj_mdl_rf <- train(
+   diagnosis ~ ., 
+   data = breast_train_prep, 
+   method = "rf",
+   metric = "ROC",
+   tuneGrid = expand.grid(mtry = 3:10),
+   trControl = oj_trControl,
+   num.trees = 500
+)
+```
+
+El valor ROC más alto se da en m=3 y se esperaba que el valor óptimo fuera aproximadamente 4 ($\sqrt{20}$), por lo que es un valor que esperábamos. 
+
+A partir de este modelo calculamos su rendimiento.
+```{r}
+pred_rf <- predict(oj_mdl_rf, newdata = breast_test_prep, type = "raw")
+oj_cm_rf <- confusionMatrix(pred_rf, breast_test_prep$diagnosis)
+oj_cm_rf
+
+pred_rf2 <- predict(oj_mdl_rf, newdata = breast_test_prep, type = "prob")[,"B"]
+roc.rf <- roc(breast_test_prep$diagnosis, pred_bag2, print.auc=TRUE, 
+               ci=TRUE,
+               plot=TRUE)
+```
+
+## KNN
+```{r, warning=FALSE}
+fitControl <- trainControl(## LOCCV
+                           method = "loocv")
+
+fit.knn3 <- train(diagnosis ~ ., 
+                  data=breast_train_prep,
+                  method="knn",
+                  trControl = fitControl, 
+                  tuneLength=10)
+
+fit.knn3
+
+knnPredict <- predict(fit.knn3, newdata=breast_train_prep) 
+oj_cm_knn <- confusionMatrix(knnPredict, breast_train_prep$diagnosis)
+oj_cm_knn
+
+pred2_knn <-  predict(fit.knn3, newdata = breast_test_prep, type = "prob")[,"B"]
+roc.knn <- roc(breast_test_prep$diagnosis, pred2_knn, print.auc=TRUE, 
+               ci=TRUE,
+               plot=TRUE)
+```
+
+## LDA
+```{r}
+fitControl <- trainControl(## 10-fold CV
+                           method = "repeatedcv",
+                           number = 10,
+                           ## repeated five times
+                           repeats = 5)
+
+fit.lda <- train(diagnosis ~ ., 
+                 data=breast_train_prep,
+                 method="lda",
+                 trControl = fitControl)
+fit.lda
+
+ldaPredict <- predict(fit.lda, newdata=breast_train_prep) 
+oj_cm_lda <- confusionMatrix(ldaPredict, breast_train_prep$diagnosis)
+oj_cm_lda
+
+pred2_lda <-  predict(fit.lda, newdata = breast_test_prep, type = "prob")[,"B"]
+roc.lda <- roc(breast_test_prep$diagnosis, pred2_lda, print.auc=TRUE, 
+               ci=TRUE,
+               plot=TRUE)
+```
+
+## Comparación de modelos
+```{r}
+oj_scoreboard <- rbind(
+  data.frame(Modelo =  "Single Tree",
+             Accuracy = oj_cm_cart$overall["Accuracy"],
+             ROC = roc.car$auc),
+  data.frame(Modelo = "Single Tree (caret)", 
+             Accuracy = oj_cm_cart2$overall["Accuracy"],
+             ROC = roc.car2$auc)
+  ) %>% arrange(desc(ROC))
+
+oj_scoreboard <- rbind(oj_scoreboard,
+   data.frame(Modelo = "Bagging", 
+              Accuracy = oj_cm_bag$overall["Accuracy"],
+              ROC = roc.bag$auc)
+) %>% arrange(desc(ROC))
+
+oj_scoreboard <- rbind(oj_scoreboard,
+   data.frame(Modelo = "Random Forest", 
+              Accuracy = oj_cm_rf$overall["Accuracy"],
+              ROC = roc.rf$auc)
+) %>% arrange(desc(ROC))
+
+oj_scoreboard <- rbind(oj_scoreboard,
+   data.frame(Modelo = "KNN", 
+              Accuracy = oj_cm_knn$overall["Accuracy"],
+              ROC = roc.knn$auc)
+) %>% arrange(desc(ROC))
+
+oj_scoreboard <- rbind(oj_scoreboard,
+   data.frame(Modelo = "LDA", 
+              Accuracy = oj_cm_lda$overall["Accuracy"],
+              ROC = roc.lda$auc)
+) %>% arrange(desc(ROC))
+
+
+knitr::kable(oj_scoreboard, row.names = FALSE)
+
+roc.test(roc.bag, roc.rf)
+```
+
+En esta tabla resumen podemos ver el Accuracy y ROC de cada método empleado. 
+Si escogemos modelo a partir del Accuracy, el mejor sería LDA, seguido de KNN y Random Forest. 
+
+Si por lo contrario queremos el modelo con ROC más elevado podríamos escoger o Bagging o Random Forest, sería indiferente.
+
+Escoger la medida con la que escogeremos nuestro modelo depende del estudio. 

@@ -1,0 +1,176 @@
+---
+title: "Preproceso cáncer de cervix"
+author: "Clara Albert"
+date: "Noviembre 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preprocesado de los datos de entrenamiento y de test
+
+```{r, include = FALSE}
+library("tidyverse")
+library(caret)
+library(RANN)
+```
+
+
+```{r}
+data = read_tsv("multicentric.txt")
+```
+
+#### Exploración descriptiva de los datos
+```{r}
+glimpse(data)
+```
+
+En este caso, todas las variables corresponden al tipo de valor que nos interesa. Eso si, conviene pasar todas las variables de tipo "char" a factores, para que el posterior análisis sea conveniente. 
+
+Por lo tanto, pasamos a factor aquellas variables que sean categóricas.
+```{r, warning=FALSE}
+cols.to.factor <- sapply(data, function(col) length(unique(col)) < 10)
+
+data[cols.to.factor] <- lapply(data[cols.to.factor], factor)
+
+data = mutate(data, regcompa = as.numeric(regcompa))
+
+glimpse(data)
+```
+
+Ahora ya si que tenemos todas las variables con el formato correcto. 
+
+
+#### Separamos en entrenamiento y test
+```{r}
+train <- createDataPartition(y = data$status, p = 0.7, 
+                             list = FALSE, times = 1)
+data_train <- data[train, ]
+data_test  <- data[-train, ]
+```
+
+
+### Preproceso datos entrenamiento
+
+#### Imputación
+
+A primera vista se pueden ver variables con datos faltantes, pero es interesante ver qué cantidad de NAs hay.
+
+```{r}
+apply(is.na(data_train),2, sum)
+```
+
+Vemos que hay variables que tienen bastantes valores ausentes. Vamos a mirar el porcentaje por variable. 
+
+```{r, warning=FALSE}
+datos_long <- data_train %>% gather(key = "variable", value = "valor", -ident)
+
+datos_long %>%
+  group_by(variable) %>% 
+  dplyr::summarize(porcentaje_NA = 100 * sum(is.na(valor)) / length(valor)) %>%
+  ggplot(aes(x = reorder(variable, desc(porcentaje_NA)), y = porcentaje_NA)) +
+    geom_col() +
+    labs(title = "Porcentaje valores ausentes por variable",
+         x = "Variable", y = "Porcentaje NAs") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Se considera que cuando una variable tiene un porcentaje elevado de missings (>20%) es conveniente eliminarla.
+
+```{r}
+data_train = dplyr::select(data_train, -c(durco, edfinco, edinico, edad1pap))
+dim(data_train)
+```
+
+Imputamos las otras variables con datos faltante. Para poderlas imputar, todas las variables han de ser numéricas. 
+```{r}
+make_df_numeric = function(df){
+  data.frame(sapply(df, function(x) as.numeric(x)))
+}
+data_train_num = make_df_numeric(data_train)
+
+preProc_imp = preProcess(data_train_num, method = c("bagImpute"))
+
+training = predict(preProc_imp, data_train_num)
+apply(is.na(training),2, sum)
+
+glimpse(training)
+```
+Vemos que las variables que eran categóricas ahora son numéricas, por lo que podemos redondearlas y así volverlas a tener como factor.
+
+```{r}
+training = training %>% mutate(totcompa = round(totcompa), ets = round(ets), pap = round(pap), vph=round(vph))
+```
+
+
+#### Normalizar, centrar y escalar
+
+Solo lo hacemos con las variables numéricas.
+```{r}
+cols.to.factor <- sapply(training, function(col) length(unique(col)) < 10)
+
+training[cols.to.factor] <- lapply(training[cols.to.factor], factor)
+
+training = mutate(training, regcompa = as.numeric(regcompa))
+
+preProc = preProcess(training, method = c("center", "scale", "BoxCox"))
+training = predict(preProc, training)
+
+glimpse(training)
+```
+
+
+
+#### Predictores con poca variablidad
+```{r}
+nearZeroVar(training, saveMetrics = TRUE)
+table(training$embara)
+```
+Vemos que la variable que nos da información sobre si ha estado alguna vez embarazada la podemos excluir, ya que es una variable que está muy desbalanzeada y por lo tanto,nos meterá ruido en el modelo y no nos interesa.
+
+```{r}
+nzv = nearZeroVar(training)
+training_filtr = dplyr::select(training, -all_of(nzv))
+```
+
+
+#### Predictores correlacionados
+```{r}
+continuas = training_filtr %>% select_if(is.numeric)
+correlacion = cor(continuas)
+findCorrelation(correlacion, cutoff = 0.95)
+```
+No hay variables correlacionadas, por lo que no tenemos que eliminar ninguna variable.
+
+
+### Preproceso datos test
+
+Hemos de realizar las mismas transformaciones, por lo que primero podemos eliminar todas las variables que hemos eliminado durante el preproceso de los datos entrenamiento. 
+
+```{r}
+data_test = dplyr::select(data_test, -c(durco, edfinco, edinico, edad1pap))
+dim(data_test)
+```
+
+Realizamos todos los pasos que echos anteriormente pero con los datos tests. Imputamos, normalizamos, centramos y escalamos de la misma manera y a las mismas variables que en el caso entrenamiento.
+```{r}
+data_test_num = make_df_numeric(data_test)
+
+test = predict(preProc_imp, data_test_num)
+apply(is.na(test),2, sum)
+
+test = test %>% mutate(totcompa = round(totcompa), ets = round(ets), pap = round(pap), vph=round(vph))
+
+glimpse(test)
+
+cols.to.factor <- sapply(test, function(col) length(unique(col)) < 10)
+test[cols.to.factor] <- lapply(test[cols.to.factor], factor)
+test = mutate(test, regcompa = as.numeric(regcompa))
+
+test = predict(preProc, test)
+glimpse(test)
+```
+
+Tenemos los datos test y entrenamiento preprocesados de la misma manera. 

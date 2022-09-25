@@ -1,0 +1,78 @@
+---
+title: "p_knn"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preproceso de los datos "diagnóstico para cáncer de mama"
+
+```{r}
+library(caret)
+library(tidyverse)
+breast <- readr::read_delim("breast.csv", delim=",")
+breast <- mutate(breast, diagnosis=as.factor(diagnosis))
+
+set.seed(123)
+train <- createDataPartition(y = breast$diagnosis, p = 0.7, 
+                             list = FALSE, times = 1)
+breast_train <- breast[train, ]
+breast_test  <- breast[-train, ]
+
+library(recipes)
+objeto_recipe <- recipe(formula = diagnosis ~ . ,
+                        data =  breast_train)
+# debemos eliminar la variable id que irrelevante para predecir
+objeto_recipe <- objeto_recipe %>% step_rm(id)
+objeto_recipe
+
+objeto_recipe <- objeto_recipe %>% step_nzv(all_predictors())
+
+objeto_recipe <- objeto_recipe %>% step_corr(all_predictors())
+
+objeto_recipe <- objeto_recipe %>% step_center(all_numeric())
+objeto_recipe <- objeto_recipe %>% step_scale(all_numeric())
+
+trained_recipe <- prep(objeto_recipe, training = breast_train)
+trained_recipe
+
+breast_train_prep <- bake(trained_recipe, new_data = breast_train)
+breast_test_prep  <- bake(trained_recipe, new_data = breast_test)
+
+```
+
+
+```{r}
+library(class)
+
+
+knn_loocv = function(k,dataset){
+  obs <- 1:nrow(dataset)
+  extraccio = function(i,dataset){
+    test <- slice(dataset,i)
+    train <- slice(dataset,-i)
+    fit.knn <- class::knn(train=select(train, !diagnosis),
+                          test=select(test, !diagnosis),          
+                          cl=train$diagnosis,
+                          k=k, prob=TRUE)
+    tt <- table(predict=fit.knn, Actual=test$diagnosis)
+    return(sum(diag(tt)/sum(tt)))
+  }
+  return(data.frame(accuracy = mean(sapply(obs,extraccio,dataset=dataset)),k = k))
+}
+
+k = seq(5,23,2)
+accur = unlist(lapply(k,knn_loocv, dataset=breast_train_prep))
+accur = matrix(accur,ncol=2,byrow=T)
+
+maxim = function(matriz){
+  fila = which.max(matriz[,1])
+  return(matriz[fila,])
+}
+
+maxim(accur)
+```
+
+
